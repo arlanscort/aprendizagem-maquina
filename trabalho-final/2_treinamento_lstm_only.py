@@ -6,7 +6,7 @@ from tensorflow import keras
 import matplotlib.pyplot as plt 
 
 #%% Dados
-ds = pd.read_csv('dados.csv', parse_dates=['data']).set_index('data')
+ds = pd.read_csv('0_dataset.csv', parse_dates=['data']).set_index('data')
 
 #%% Configuracoes
 n_passos = 365
@@ -40,15 +40,15 @@ X_validacao = np.stack(X_validacao, axis=2)
 y_treino = ds_norm.loc[treino_ini:treino_fim, var_saida].values.reshape(-1,1)
 y_validacao = ds_norm.loc[validacao_ini:validacao_fim, var_saida].values.reshape(-1,1)
 
-#%% Treino
+#%% Experimento LSTM-only
 lista = []
-for N in [64]:
+for N in [16, 32, 64, 128]:
     for BS in [32, 64, 128, 256, 512]:
         for LR in [0.001, 0.0001]:
             print(N, BS, LR)
             lstm = keras.models.Sequential([
                 keras.layers.LSTM(N, input_shape=[None, X_treino.shape[2]], return_sequences=True, dropout=0.1),
-                keras.layers.LSTM(N, return_sequences=False, dropout=0.1),
+                keras.layers.LSTM(N, return_sequences=False),
                 keras.layers.Dense(1)
             ])
             opt = keras.optimizers.Adam(learning_rate=LR)
@@ -59,10 +59,27 @@ for N in [64]:
             lista.append([N, BS, LR, min_loss, min_epoch])
             df = pd.DataFrame(data=lista, columns=['N', 'BS', 'LR', 'min_loss', 'min_epoch'])
             df.to_excel('resultados/lstm_only.xlsx')
-            # y_pred_lstm = lstm.predict(X_validacao)
 
+#%% Treinamento com hiperparametros otimos
+N = 64
+BS = 32
+LR = 0.001
+lstm = keras.models.Sequential([
+    keras.layers.LSTM(N, input_shape=[None, X_treino.shape[2]], return_sequences=True, dropout=0.1),
+    keras.layers.LSTM(N, return_sequences=False),
+    keras.layers.Dense(1)
+])
+opt = keras.optimizers.Adam(learning_rate=LR)
+lstm.compile(loss='mean_squared_error', optimizer=opt)
+historico_lstm = lstm.fit(X_treino, y_treino, epochs=5, batch_size=BS, verbose=1, shuffle=True, validation_data=[X_validacao, y_validacao])
 
-#%% Plot
+#%% Predicao
+y_pred_lstm = lstm.predict(X_validacao)
+Q_pred = y_pred*desvios_norm['qobs_imp'] + medias_norm['qobs_imp']
+Q_pred = pd.DataFrame(data=Q_pred, index=pd.date_range(validacao_ini, validacao_fim, freq='D'))
+Q_pred.to_csv('resultados/q_pred_lstm_only_validacao.csv')
+
+#%% Gráficos
 fig1, ax1 = plt.subplots()
 ax1.plot(historico_lstm.history['loss'], label='loss')
 ax1.plot(historico_lstm.history['val_loss'], label='val_loss')
@@ -73,18 +90,4 @@ for i, var in enumerate(vars_entrada):
 ax2[-1].plot(y_validacao, color='black', label='validacao')
 ax2[-1].plot(y_pred_lstm, color='red', label='pred lstm')
 ax2[-1].title.set_text('predicao')
-
-
-#%% Retorna
-residuo = y_pred_lstm*desvios_norm['res'] + medias_norm['res']
-# %%
-
-qsim = ds.loc['2019-01-01':, 'qsim'] + residuo[:,0]
-qobs = ds.loc['2019':, 'qobs_imp'].to_numpy()
-log_qsim = np.log(qsim)
-log_qobs = np.log(qobs)
-NSE = 1 - np.sum((qsim-qobs)**2)/np.sum((qsim-np.mean(qobs))**2)
-logNSE = 1 - np.sum((log_qsim-log_qobs)**2)/np.sum((log_qsim-np.mean(log_qobs))**2)
-PBIAS = np.sum(qsim-qobs)/np.sum(qobs)*100
-r = np.corrcoef(qsim, qobs)[0,1] 
 # %%
